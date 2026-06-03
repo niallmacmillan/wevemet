@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#4f46e5" />
+  <meta name="description" content="Learn names and faces with flashcards and quizzes. Built for networking, events and meeting new people." />
+  <title>Faces &amp; Names — Networking Memory</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-bar">
+    <div class="app-bar__brand">
+      <span class="app-bar__logo">🧠</span>
+      <div>
+        <h1>Faces &amp; Names</h1>
+        <p class="app-bar__tagline">Never forget a name again</p>
+      </div>
+    </div>
+    <div class="app-bar__event">
+      <label for="event-select" class="sr-only">Active event</label>
+      <select id="event-select" class="event-select" aria-label="Active event"></select>
+      <button id="new-event-btn" class="btn btn--ghost btn--icon" title="New event">＋</button>
+      <button id="event-menu-btn" class="btn btn--ghost btn--icon" title="Event options">⋯</button>
+    </div>
+  </header>
+
+  <main id="view" class="view"></main>
+
+  <nav class="tab-bar" role="tablist" aria-label="Main navigation">
+    <button class="tab" data-view="people" role="tab"><span class="tab__icon">👥</span><span>People</span></button>
+    <button class="tab" data-view="add" role="tab"><span class="tab__icon">＋</span><span>Add</span></button>
+    <button class="tab" data-view="quiz" role="tab"><span class="tab__icon">🎯</span><span>Quiz</span></button>
+    <button class="tab" data-view="stats" role="tab"><span class="tab__icon">📊</span><span>Stats</span></button>
+  </nav>
+
+  <!-- Reusable modal host -->
+  <div id="modal-root" class="modal-root" hidden></div>
+
+  <!-- Toast host -->
+  <div id="toast-root" class="toast-root" aria-live="polite"></div>
+
+  <!-- Tesseract.js is loaded lazily for screenshot OCR; the app works fully without it. -->
+  <script src="app.js" type="module"></script>
+</body>
+</html>
