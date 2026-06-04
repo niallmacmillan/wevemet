@@ -1,6 +1,6 @@
-/* Service worker: cache the app shell so Faces & Names works offline
+/* Service worker: cache the app shell so WeveMet works offline
  * and can be installed to a home screen. */
-const CACHE = 'facesnames-v1';
+const CACHE = 'wevemet-v2';
 const SHELL = [
   './',
   './index.html',
@@ -8,6 +8,8 @@ const SHELL = [
   './app.js',
   './store.js',
   './ocr.js',
+  './media.js',
+  './enrich.js',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',

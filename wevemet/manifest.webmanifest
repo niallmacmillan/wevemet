@@ -1,7 +1,7 @@
 {
-  "name": "Faces & Names — Networking Memory",
-  "short_name": "Faces & Names",
-  "description": "Learn names and faces with flashcards and quizzes. Built for networking, events and meeting new people.",
+  "name": "WeveMet — Remember everyone you meet",
+  "short_name": "WeveMet",
+  "description": "Remember names, faces and details of everyone you meet. Flashcards and quizzes for networking, events and new jobs.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

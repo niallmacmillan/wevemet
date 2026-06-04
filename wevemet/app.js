@@ -1,14 +1,16 @@
 /* =====================================================================
- * Faces & Names — a networking / memory flashcard app.
+ * WeveMet — a networking / memory flashcard app.
  *
- * No backend, no build step. All data lives in localStorage on the
- * device (photos are stored as compressed data URLs). The app works
- * fully offline; screenshot OCR is an optional enhancement that lazily
- * loads Tesseract.js from a CDN when available.
+ * No backend, no build step. Attendee data lives in localStorage; larger
+ * media (photos & videos) lives in IndexedDB. The app works fully
+ * offline. Screenshot OCR (Tesseract.js) and AI research are optional
+ * enhancements that load lazily / only when configured.
  * ===================================================================== */
 
 import { Store } from './store.js';
 import { initOCR } from './ocr.js';
+import { putMedia, getMediaURL, deleteMedia } from './media.js';
+import { researchLinks, enrichWithAI } from './enrich.js';
 
 /* ----------------------------- Utilities ---------------------------- */
 
@@ -99,6 +101,32 @@ function fileToDataURL(file, maxDim = 640) {
   });
 }
 
+/* Resize + compress an uploaded image file into a Blob (for the gallery,
+ * stored in IndexedDB). Falls back to the original file on any failure. */
+function fileToBlob(file, maxDim = 1280) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        const scale = Math.min(1, maxDim / Math.max(width, height));
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+        const canvas = el('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+        canvas.toBlob((blob) => resolve(blob || file), 'image/jpeg', 0.85);
+      };
+      img.onerror = () => resolve(file);
+      img.src = reader.result;
+    };
+    reader.onerror = () => resolve(file);
+    reader.readAsDataURL(file);
+  });
+}
+
 /* ----------------------------- Modal -------------------------------- */
 
 function openModal(title, bodyBuilder) {
@@ -131,9 +159,25 @@ function field(labelText, control, hint) {
  * People editor (shared by Add and Edit)
  * ===================================================================== */
 
+const SOCIAL_FIELDS = [
+  ['linkedin', 'LinkedIn', '💼', 'linkedin.com/in/…'],
+  ['twitter', 'X / Twitter', '𝕏', '@handle or link'],
+  ['instagram', 'Instagram', '📸', '@handle or link'],
+  ['facebook', 'Facebook', '📘', 'facebook.com/…'],
+  ['tiktok', 'TikTok', '🎵', '@handle or link'],
+  ['website', 'Website', '🌐', 'https://…'],
+];
+
 function personForm(existing, onSave) {
   let photo = existing?.photo || null;
 
+  // Working copy of the media gallery. Existing items are already in
+  // IndexedDB (persisted); newly added items hold their blob in memory
+  // and are only written to IndexedDB on save (so Cancel leaves no junk).
+  const media = (existing?.media || []).map((m) => ({ ...m, persisted: true }));
+  const removedIds = [];
+
+  /* ---- Avatar / primary photo ---- */
   const photoEl = avatar(existing || { name: '' }, true);
   const photoInput = el('input', { type: 'file', accept: 'image/*', class: 'sr-only', id: 'photo-input' });
   photoInput.addEventListener('change', async (e) => {
@@ -141,48 +185,206 @@ function personForm(existing, onSave) {
     if (!file) return;
     photo = await fileToDataURL(file);
     const fresh = avatar({ name: nameInput.value, photo }, true);
-    photoEl.replaceWith(fresh);
     photoWrap.querySelector('.avatar')?.replaceWith(fresh);
   });
 
   const photoWrap = el('div', { class: 'photo-picker' }, [
     photoEl,
-    el('label', { class: 'btn btn--soft btn--sm', for: 'photo-input' }, photo ? 'Change photo' : 'Add photo'),
+    el('label', { class: 'btn btn--soft btn--sm', for: 'photo-input' }, photo ? 'Change face photo' : 'Add face photo'),
     photoInput,
-    el('span', { class: 'photo-picker__hint' }, 'A face photo makes the quiz work best'),
+    el('span', { class: 'photo-picker__hint' }, 'The face photo is what the quiz shows'),
   ]);
 
+  /* ---- Core fields ---- */
   const nameInput = el('input', { class: 'input', placeholder: 'e.g. Jessica Taylor', value: existing?.name || '' });
   const titleInput = el('input', { class: 'input', placeholder: 'e.g. Product Manager', value: existing?.title || '' });
   const companyInput = el('input', { class: 'input', placeholder: 'e.g. Acme Ltd', value: existing?.company || '' });
   const aboutInput = el('textarea', { class: 'input', placeholder: 'How you met, shared interests, a memory hook…' }, existing?.about || '');
+
+  /* ---- Media gallery (images + videos) ---- */
+  const gallery = el('div', { class: 'gallery' });
+  const renderGallery = () => {
+    gallery.innerHTML = '';
+    if (!media.length) {
+      gallery.appendChild(el('p', { class: 'hint', style: 'margin:0' }, 'No photos or videos yet.'));
+    }
+    media.forEach((m) => {
+      const tile = el('div', { class: 'gallery__item' });
+      const node = m.kind === 'video'
+        ? el('video', { class: 'gallery__media', muted: '', playsinline: '', controls: '' })
+        : el('img', { class: 'gallery__media', alt: m.name || 'photo' });
+      // Fill the source: from memory (new) or IndexedDB (existing).
+      if (m.url) node.src = m.url;
+      else getMediaURL(m.id).then((u) => { if (u) node.src = u; });
+      const del = el('button', {
+        class: 'gallery__del', title: 'Remove',
+        onclick: () => {
+          if (m.persisted) removedIds.push(m.id);
+          media.splice(media.indexOf(m), 1);
+          renderGallery();
+        },
+      }, '✕');
+      tile.appendChild(node);
+      tile.appendChild(del);
+      gallery.appendChild(tile);
+    });
+  };
+  renderGallery();
+
+  const mediaInput = el('input', { type: 'file', accept: 'image/*,video/*', multiple: true, class: 'sr-only', id: 'media-input' });
+  mediaInput.addEventListener('change', async (e) => {
+    for (const file of [...e.target.files]) {
+      const kind = file.type.startsWith('video') ? 'video' : 'image';
+      // Compress images; keep videos as-is.
+      const blob = kind === 'image' ? await fileToBlob(file, 1280) : file;
+      media.push({ id: null, kind, name: file.name, blob, url: URL.createObjectURL(blob), persisted: false });
+    }
+    mediaInput.value = '';
+    renderGallery();
+  });
+
+  const mediaSection = el('div', {}, [
+    gallery,
+    el('label', { class: 'btn btn--soft btn--sm', for: 'media-input', style: 'margin-top:10px' }, '＋ Add photos / videos'),
+    mediaInput,
+  ]);
+
+  /* ---- Social links ---- */
+  const socialInputs = {};
+  const socialSection = el('div', { class: 'socials' });
+  SOCIAL_FIELDS.forEach(([key, label, icon, ph]) => {
+    const inp = el('input', { class: 'input', placeholder: ph, value: existing?.socials?.[key] || '' });
+    socialInputs[key] = inp;
+    socialSection.appendChild(
+      el('label', { class: 'social-row' }, [
+        el('span', { class: 'social-row__icon', title: label }, icon),
+        inp,
+      ])
+    );
+  });
+
+  /* ---- AI research panel ---- */
+  const aiPanel = buildAIPanel(
+    () => ({ name: nameInput.value.trim(), title: titleInput.value.trim(), company: companyInput.value.trim() }),
+    (sugg) => {
+      if (sugg.suggestedTitle && !titleInput.value.trim()) titleInput.value = sugg.suggestedTitle;
+      if (sugg.suggestedCompany && !companyInput.value.trim()) companyInput.value = sugg.suggestedCompany;
+      if (sugg.summary) {
+        aboutInput.value = aboutInput.value
+          ? `${aboutInput.value}\n\n${sugg.summary}`
+          : sugg.summary;
+      }
+    }
+  );
 
   const form = el('div', {}, [
     photoWrap,
     field('Name *', nameInput),
     field('Job title', titleInput),
     field('Company', companyInput),
+    aiPanel,
     field('About / notes', aboutInput),
+    el('h3', { class: 'editor-subhead' }, '📷 Photos & videos'),
+    mediaSection,
+    el('h3', { class: 'editor-subhead' }, '🔗 Social links'),
+    socialSection,
   ]);
 
-  const save = () => {
+  const save = async () => {
     const name = nameInput.value.trim();
     if (!name) {
       toast('Name is required', 'bad');
       nameInput.focus();
       return false;
     }
+    // Persist newly added blobs and drop removed ones.
+    for (const m of media) {
+      if (!m.persisted) m.id = await putMedia(m.blob, undefined);
+    }
+    for (const id of removedIds) await deleteMedia(id);
+
+    const socials = {};
+    Object.entries(socialInputs).forEach(([k, inp]) => {
+      const v = inp.value.trim();
+      if (v) socials[k] = v;
+    });
+
     onSave({
       name,
       title: titleInput.value.trim(),
       company: companyInput.value.trim(),
       about: aboutInput.value.trim(),
       photo,
+      socials,
+      media: media.map((m) => ({ id: m.id, kind: m.kind, name: m.name })),
     });
     return true;
   };
 
   return { form, save };
+}
+
+/* Build the collapsible AI research panel: quick search links plus an
+ * optional AI summary (only when an API key is configured + confident). */
+function buildAIPanel(getPerson, applySuggestions) {
+  const out = el('div', { class: 'ai-panel__out' });
+
+  const runAI = async (btn) => {
+    const person = getPerson();
+    if (!person.name) return toast('Add a name first', 'bad');
+    out.innerHTML = '';
+    out.appendChild(el('p', { class: 'hint' }, '🔎 Asking AI…'));
+    btn.disabled = true;
+    try {
+      const r = await enrichWithAI(person, Store.getSettings());
+      out.innerHTML = '';
+      if (!r.confident || !r.summary) {
+        out.appendChild(el('p', { class: 'hint' }, "AI wasn't confident about this person, so nothing was added. Try the search links above."));
+      } else {
+        out.appendChild(el('p', { class: 'ai-summary' }, r.summary));
+        if (r.notableFacts.length) {
+          out.appendChild(el('ul', { class: 'ai-facts' }, r.notableFacts.slice(0, 4).map((f) => el('li', {}, f))));
+        }
+        out.appendChild(
+          el('button', { class: 'btn btn--good btn--sm', onclick: () => { applySuggestions(r); toast('Added to notes', 'good'); } }, '＋ Use this')
+        );
+      }
+    } catch (err) {
+      out.innerHTML = '';
+      if (err.code === 'NO_KEY') {
+        out.appendChild(el('p', { class: 'hint' }, 'Add your AI API key in Stats → Settings to enable AI lookups.'));
+        out.appendChild(el('button', { class: 'btn btn--soft btn--sm', onclick: () => { /* jump to settings */ switchView('stats'); } }, 'Open Settings'));
+      } else if (err.code === 'BAD_KEY') {
+        out.appendChild(el('p', { class: 'hint' }, 'That API key was rejected. Check it in Settings.'));
+      } else {
+        out.appendChild(el('p', { class: 'hint' }, 'AI lookup failed (you may be offline). The search links above always work.'));
+      }
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  const linksRow = el('div', { class: 'ai-links' });
+  const refreshLinks = () => {
+    linksRow.innerHTML = '';
+    researchLinks(getPerson()).forEach((l) =>
+      linksRow.appendChild(el('a', { class: 'chip', href: l.url, target: '_blank', rel: 'noopener' }, `${l.icon} ${l.label}`))
+    );
+  };
+  refreshLinks();
+
+  const aiBtn = el('button', { class: 'btn btn--soft btn--sm' }, '✨ Find info with AI');
+  aiBtn.addEventListener('click', () => runAI(aiBtn));
+
+  return el('div', { class: 'ai-panel' }, [
+    el('div', { class: 'ai-panel__head' }, [
+      el('span', {}, '🕵️ Research'),
+      aiBtn,
+    ]),
+    el('p', { class: 'hint', style: 'margin:6px 0' }, 'Public searches you can open, or an AI summary (only shown if confident).'),
+    linksRow,
+    out,
+  ]);
 }
 
 function openPersonEditor(person) {
@@ -197,8 +399,11 @@ function openPersonEditor(person) {
       el('button', { class: 'btn btn--soft', onclick: close }, 'Cancel'),
       el('button', {
         class: 'btn',
-        onclick: () => {
-          if (save()) close();
+        onclick: async (e) => {
+          const btn = e.currentTarget;
+          btn.disabled = true;
+          if (await save()) close();
+          else btn.disabled = false;
         },
       }, person ? 'Save' : 'Add person'),
     ]);
@@ -208,8 +413,9 @@ function openPersonEditor(person) {
         el('button', {
           class: 'btn btn--danger btn--block',
           style: 'margin-top:10px',
-          onclick: () => {
+          onclick: async () => {
             if (confirm(`Delete ${person.name}?`)) {
+              for (const m of person.media || []) await deleteMedia(m.id);
               Store.deletePerson(person.id);
               toast('Deleted');
               close();
@@ -257,11 +463,16 @@ function viewPeople(view) {
     filtered.forEach((p) => {
       const mastery = Store.mastery(p);
       const meta = [p.title, p.company].filter(Boolean).join(' · ') || 'No details yet';
+      const badges = [];
+      const mediaCount = (p.media || []).length;
+      const socialCount = Object.keys(p.socials || {}).length;
+      if (mediaCount) badges.push(`📷 ${mediaCount}`);
+      if (socialCount) badges.push(`🔗 ${socialCount}`);
       const row = el('div', { class: 'person-row', onclick: () => openPersonEditor(p) }, [
         avatar(p),
         el('div', { class: 'person-row__info' }, [
           el('div', { class: 'person-row__name' }, p.name),
-          el('div', { class: 'person-row__meta' }, meta),
+          el('div', { class: 'person-row__meta' }, meta + (badges.length ? '  ' + badges.join('  ') : '')),
           el('div', { class: 'mastery-bar' }, [
             (() => {
               const f = el('div', { class: 'mastery-bar__fill' });
@@ -892,10 +1103,28 @@ function viewStats(view) {
     view.appendChild(card);
   }
 
+  view.appendChild(el('h2', { class: 'section-title' }, 'Settings · AI research'));
+  const settings = Store.getSettings();
+  const keyInput = el('input', { class: 'input', type: 'password', placeholder: 'sk-ant-…', value: settings.aiKey || '' });
+  view.appendChild(
+    el('div', { class: 'card' }, [
+      el('p', { class: 'hint', style: 'margin-top:0' },
+        'Optional. Paste an Anthropic API key to enable the “Find info with AI” button on each person. The key is stored only on this device and is never included in backups. AI summaries can be wrong — use only for public professional context.'),
+      field('Anthropic API key', keyInput),
+      el('div', { class: 'row-actions' }, [
+        el('button', {
+          class: 'btn btn--sm',
+          onclick: () => { Store.setSettings({ aiKey: keyInput.value.trim() }); toast('Saved', 'good'); },
+        }, 'Save key'),
+        el('a', { class: 'btn btn--soft btn--sm', href: 'https://console.anthropic.com/settings/keys', target: '_blank', rel: 'noopener' }, 'Get a key ↗'),
+      ]),
+    ])
+  );
+
   view.appendChild(el('h2', { class: 'section-title' }, 'Data'));
   view.appendChild(
     el('div', { class: 'card' }, [
-      el('p', { class: 'hint', style: 'margin-top:0' }, 'Everything is stored privately on this device. Back it up or move it to another device with export / import.'),
+      el('p', { class: 'hint', style: 'margin-top:0' }, 'Everything is stored privately on this device. Back it up or move it to another device with export / import. (Export covers people & scores; photos/videos stay on this device.)'),
       el('div', { class: 'row-actions' }, [
         el('button', { class: 'btn btn--soft btn--sm', onclick: exportData }, '⬇ Export'),
         el('button', { class: 'btn btn--soft btn--sm', onclick: importData }, '⬆ Import'),
@@ -906,7 +1135,7 @@ function viewStats(view) {
 
 function exportData() {
   const blob = new Blob([Store.exportJSON()], { type: 'application/json' });
-  const a = el('a', { href: URL.createObjectURL(blob), download: `faces-names-${Date.now()}.json` });
+  const a = el('a', { href: URL.createObjectURL(blob), download: `wevemet-${Date.now()}.json` });
   document.body.appendChild(a);
   a.click();
   a.remove();

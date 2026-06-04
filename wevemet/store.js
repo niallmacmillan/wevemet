@@ -1,17 +1,24 @@
 /* =====================================================================
- * Store — all persistence for Faces & Names.
+ * Store — all persistence for WeveMet.
  *
  * Data shape (localStorage key "facesnames.v1"):
  * {
  *   activeEventId: string,
  *   events:  [{ id, name, createdAt }],
- *   people:  [{ id, eventId, name, title, company, about, photo, stats }],
+ *   people:  [{ id, eventId, name, title, company, about, photo,
+ *              socials, media, stats }],
  *   quizzes: [{ id, eventId, date, total, correct, mode }]
  * }
- * stats = { seen, correct, wrong, streak }
+ * stats   = { seen, correct, wrong, streak }
+ * socials = { linkedin, twitter, instagram, facebook, tiktok, website }
+ * media   = [{ id, kind: 'image'|'video', name }]  (blobs live in IndexedDB)
+ *
+ * Settings (API keys etc.) live under a SEPARATE key and are deliberately
+ * NOT part of exportJSON, so backups never contain secrets.
  * ===================================================================== */
 
 const KEY = 'facesnames.v1';
+const SETTINGS_KEY = 'wevemet.settings';
 
 let state = null;
 
@@ -50,7 +57,26 @@ export const Store = {
     if (!state.events.find((e) => e.id === state.activeEventId)) {
       state.activeEventId = state.events[0].id;
     }
+    // Migration: backfill fields added in later versions.
+    state.people.forEach((p) => {
+      if (!p.socials) p.socials = {};
+      if (!Array.isArray(p.media)) p.media = [];
+    });
     persist();
+  },
+
+  /* ---- Settings (kept separate; never exported) ---- */
+  getSettings() {
+    try {
+      return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {};
+    } catch {
+      return {};
+    }
+  },
+  setSettings(partial) {
+    const merged = { ...this.getSettings(), ...partial };
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(merged));
+    return merged;
   },
 
   /* ---- Events ---- */
@@ -103,6 +129,8 @@ export const Store = {
       company: '',
       about: '',
       photo: null,
+      socials: {},
+      media: [],
       stats: { seen: 0, correct: 0, wrong: 0, streak: 0 },
       ...data,
     };
