@@ -1,6 +1,6 @@
 name: Deploy app to GitHub Pages
 
-# Publishes the Faces & Names app (the app/ folder) to GitHub Pages.
+# Publishes the Faces & Names app (the faces-and-names/ folder) to GitHub Pages.
 # Runs whenever the app changes on the default branch, and can also be
 # triggered by hand from the Actions tab.
 
@@ -8,7 +8,7 @@ on:
   push:
     branches: [master]
     paths:
-      - 'app/**'
+      - 'faces-and-names/**'
       - '.github/workflows/deploy-pages.yml'
   workflow_dispatch:
 
@@ -38,10 +38,10 @@ jobs:
         with:
           enablement: true
 
-      - name: Upload app/ as the Pages artifact
+      - name: Upload faces-and-names/ as the Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: app
+          path: faces-and-names
 
       - name: Deploy to GitHub Pages
         id: deployment

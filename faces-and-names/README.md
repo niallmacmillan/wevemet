@@ -39,7 +39,7 @@ modules and a service worker, it should be opened over `http://`, not as a
 `file://` path. Any static server works:
 
 ```bash
-cd app
+cd faces-and-names
 python3 -m http.server 8000
 # then open http://localhost:8000
 ```
