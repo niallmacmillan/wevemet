@@ -1,6 +1,6 @@
 /* Service worker: cache the app shell so WeveMet works offline
  * and can be installed to a home screen. */
-const CACHE = 'wevemet-v2';
+const CACHE = 'wevemet-v3';
 const SHELL = [
   './',
   './index.html',

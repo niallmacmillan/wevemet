@@ -10,7 +10,7 @@
 import { Store } from './store.js';
 import { initOCR } from './ocr.js';
 import { putMedia, getMediaURL, deleteMedia } from './media.js';
-import { researchLinks, enrichWithAI } from './enrich.js';
+import { researchLinks, research } from './enrich.js';
 
 /* ----------------------------- Utilities ---------------------------- */
 
@@ -332,18 +332,27 @@ function buildAIPanel(getPerson, applySuggestions) {
   const runAI = async (btn) => {
     const person = getPerson();
     if (!person.name) return toast('Add a name first', 'bad');
+    const settings = Store.getSettings();
     out.innerHTML = '';
-    out.appendChild(el('p', { class: 'hint' }, '🔎 Asking AI…'));
+    out.appendChild(el('p', { class: 'hint' }, settings.researchEndpoint ? '🌐 Searching the web…' : '🔎 Asking AI…'));
     btn.disabled = true;
     try {
-      const r = await enrichWithAI(person, Store.getSettings());
+      const r = await research(person, settings);
       out.innerHTML = '';
       if (!r.confident || !r.summary) {
-        out.appendChild(el('p', { class: 'hint' }, "AI wasn't confident about this person, so nothing was added. Try the search links above."));
+        out.appendChild(el('p', { class: 'hint' }, "Couldn't find anything reliable, so nothing was added. Try the search links above."));
       } else {
         out.appendChild(el('p', { class: 'ai-summary' }, r.summary));
         if (r.notableFacts.length) {
           out.appendChild(el('ul', { class: 'ai-facts' }, r.notableFacts.slice(0, 4).map((f) => el('li', {}, f))));
+        }
+        if (r.sources && r.sources.length) {
+          out.appendChild(el('div', { class: 'ai-sources' }, [
+            el('span', { class: 'hint' }, 'Sources: '),
+            ...r.sources.slice(0, 4).map((s, i) =>
+              el('a', { class: 'ai-source', href: typeof s === 'string' ? s : s.url, target: '_blank', rel: 'noopener' }, `[${i + 1}]`)
+            ),
+          ]));
         }
         out.appendChild(
           el('button', { class: 'btn btn--good btn--sm', onclick: () => { applySuggestions(r); toast('Added to notes', 'good'); } }, '＋ Use this')
@@ -539,6 +548,168 @@ function viewAdd(view) {
       screenshotInput,
     ])
   );
+
+  view.appendChild(el('h2', { class: 'section-title' }, 'From a group photo 👥'));
+  const groupInput = el('input', { type: 'file', accept: 'image/*', class: 'sr-only', id: 'group-input' });
+  groupInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) openGroupPhotoFlow(file);
+    groupInput.value = '';
+  });
+  view.appendChild(
+    el('div', { class: 'card' }, [
+      el('p', { class: 'hint', style: 'margin-top:0' },
+        'Upload one group/event photo, draw a box around each face, and WeveMet turns each into a person you can name. Great for a team or table photo.'),
+      el('label', { class: 'btn btn--block', for: 'group-input' }, 'Choose a group photo'),
+      groupInput,
+    ])
+  );
+}
+
+/* =====================================================================
+ * Group-photo → people: draw boxes around faces, crop, name, add.
+ * ===================================================================== */
+
+async function openGroupPhotoFlow(file) {
+  const dataURL = await fileToDataURL(file, 1600);
+  const img = new Image();
+  img.src = dataURL;
+  await new Promise((res) => { img.onload = res; });
+
+  // boxes: rectangles in NATURAL image coordinates.
+  let boxes = [];
+
+  // Try the browser's built-in face detector to pre-seed boxes.
+  if ('FaceDetector' in window) {
+    try {
+      const faces = await new window.FaceDetector({ fastMode: true }).detect(img);
+      boxes = faces.map((f) => ({ x: f.boundingBox.x, y: f.boundingBox.y, w: f.boundingBox.width, h: f.boundingBox.height }));
+    } catch { /* not supported / failed — manual only */ }
+  }
+
+  openModal('Tag faces', (close) => {
+    const stage = el('div', { class: 'crop-stage' });
+    const shownImg = el('img', { class: 'crop-img', src: dataURL });
+    const overlay = el('div', { class: 'crop-overlay' });
+    stage.appendChild(shownImg);
+    stage.appendChild(overlay);
+
+    const listWrap = el('div', { class: 'crop-list' });
+
+    // Map natural <-> displayed coordinates using the rendered image size.
+    const scale = () => shownImg.clientWidth / (img.naturalWidth || 1);
+
+    const redraw = () => {
+      overlay.innerHTML = '';
+      const s = scale();
+      boxes.forEach((b, i) => {
+        const div = el('div', { class: 'crop-box' });
+        div.style.left = `${b.x * s}px`;
+        div.style.top = `${b.y * s}px`;
+        div.style.width = `${b.w * s}px`;
+        div.style.height = `${b.h * s}px`;
+        div.appendChild(el('span', { class: 'crop-box__num' }, String(i + 1)));
+        overlay.appendChild(div);
+      });
+      drawList();
+    };
+
+    const drawList = () => {
+      listWrap.innerHTML = '';
+      if (!boxes.length) {
+        listWrap.appendChild(el('p', { class: 'hint' }, 'Drag across each face above to create a box.'));
+        return;
+      }
+      boxes.forEach((b, i) => {
+        const thumb = el('canvas', { class: 'crop-thumb', width: 48, height: 48 });
+        const ctx = thumb.getContext('2d');
+        ctx.drawImage(img, b.x, b.y, b.w, b.h, 0, 0, 48, 48);
+        const nameInp = el('input', { class: 'input', placeholder: `Person ${i + 1} name`, value: b.name || '' });
+        nameInp.addEventListener('input', () => { b.name = nameInp.value; });
+        listWrap.appendChild(
+          el('div', { class: 'crop-row' }, [
+            el('span', { class: 'crop-row__num' }, String(i + 1)),
+            thumb,
+            nameInp,
+            el('button', { class: 'btn btn--soft btn--sm', onclick: () => { boxes.splice(i, 1); redraw(); } }, '✕'),
+          ])
+        );
+      });
+    };
+
+    // Pointer-drag to draw a new box.
+    let start = null;
+    let ghost = null;
+    overlay.addEventListener('pointerdown', (e) => {
+      const rect = overlay.getBoundingClientRect();
+      start = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      ghost = el('div', { class: 'crop-box crop-box--ghost' });
+      overlay.appendChild(ghost);
+      overlay.setPointerCapture(e.pointerId);
+    });
+    overlay.addEventListener('pointermove', (e) => {
+      if (!start || !ghost) return;
+      const rect = overlay.getBoundingClientRect();
+      const x = e.clientX - rect.left, y = e.clientY - rect.top;
+      ghost.style.left = `${Math.min(start.x, x)}px`;
+      ghost.style.top = `${Math.min(start.y, y)}px`;
+      ghost.style.width = `${Math.abs(x - start.x)}px`;
+      ghost.style.height = `${Math.abs(y - start.y)}px`;
+    });
+    overlay.addEventListener('pointerup', (e) => {
+      if (!start) return;
+      const rect = overlay.getBoundingClientRect();
+      const x = e.clientX - rect.left, y = e.clientY - rect.top;
+      const s = scale();
+      const w = Math.abs(x - start.x), h = Math.abs(y - start.y);
+      if (w > 12 && h > 12) {
+        boxes.push({
+          x: Math.min(start.x, x) / s,
+          y: Math.min(start.y, y) / s,
+          w: w / s,
+          h: h / s,
+        });
+      }
+      start = null;
+      if (ghost) ghost.remove();
+      ghost = null;
+      redraw();
+    });
+
+    // Redraw once the image has laid out.
+    requestAnimationFrame(redraw);
+    window.addEventListener('resize', redraw, { once: true });
+
+    const addAll = async () => {
+      if (!boxes.length) return toast('Draw a box around at least one face', 'bad');
+      let n = 0;
+      for (const b of boxes) {
+        const canvas = el('canvas');
+        const size = 480;
+        canvas.width = size; canvas.height = size;
+        canvas.getContext('2d').drawImage(img, b.x, b.y, b.w, b.h, 0, 0, size, size);
+        const photo = canvas.toDataURL('image/jpeg', 0.85);
+        Store.addPerson({ name: (b.name || '').trim() || `Person ${n + 1}`, photo });
+        n++;
+      }
+      toast(`Added ${n} from photo`, 'good');
+      close();
+      switchView('people');
+    };
+
+    return [
+      el('p', { class: 'hint', style: 'margin-top:0' },
+        ('FaceDetector' in window)
+          ? 'Faces are auto-detected where possible. Drag to add or fix boxes, name each, then add.'
+          : 'Drag across each face to box it, name each, then add. (Auto-detect isn’t supported in this browser.)'),
+      stage,
+      listWrap,
+      el('div', { class: 'modal__actions' }, [
+        el('button', { class: 'btn btn--soft', onclick: close }, 'Cancel'),
+        el('button', { class: 'btn', onclick: addAll }, 'Add people'),
+      ]),
+    ];
+  });
 }
 
 function parseBulk(text) {
@@ -767,6 +938,23 @@ function viewQuiz(view) {
     ])
   );
 
+  // Spaced-repetition: review the people that are due today.
+  const duePeople = Store.duePeople();
+  if (duePeople.length >= 2) {
+    view.appendChild(
+      el('div', { class: 'card' }, [
+        el('p', { class: 'hint', style: 'margin-top:0' }, `⏰ ${duePeople.length} ${duePeople.length === 1 ? 'person is' : 'people are'} due for review (spaced repetition).`),
+        el('button', {
+          class: 'btn btn--block',
+          onclick: () => {
+            quizState = buildQuiz(duePeople, mode, Math.min(duePeople.length, 20), people);
+            render();
+          },
+        }, '⏰ Review due now'),
+      ])
+    );
+  }
+
   // Quick "focus on weak spots" option
   const weak = people.filter((p) => Store.mastery(p) < 0.6 && (p.stats?.seen || 0) > 0);
   if (weak.length >= 2) {
@@ -965,7 +1153,19 @@ function renderQuizQuestion(view) {
           else render();
         },
       }, quizState.index + 1 >= total ? 'See results' : 'Next →');
+      // After answering, let the user jump straight to this person to add
+      // a memory hook / fix details while it's fresh.
+      const subjectName = Store.getPerson(q.personId)?.name || '';
+      const editLink = el('button', {
+        class: 'btn btn--soft btn--sm',
+        style: 'margin-top:10px',
+        onclick: () => {
+          const person = Store.getPerson(q.personId);
+          if (person) openPersonEditor(person);
+        },
+      }, `✎ Edit ${subjectName.split(' ')[0] || 'person'}`);
       wrap.appendChild(nextBtn);
+      wrap.appendChild(editLink);
       nextBtn.focus();
     });
     optionsWrap.appendChild(btn);
@@ -1032,8 +1232,29 @@ function finishQuiz() {
     });
   }
 
+  // Offer an immediate retry of just the ones missed.
+  if (missed.length) {
+    const missedPeople = [...new Set(missed.map((a) => a.q.personId))]
+      .map((id) => Store.getPerson(id))
+      .filter(Boolean);
+    if (missedPeople.length >= 1) {
+      view.appendChild(
+        el('button', {
+          class: 'btn btn--good btn--block',
+          style: 'margin-top:18px',
+          onclick: () => {
+            const pool = Store.people();
+            quizState = buildQuiz(missedPeople, finished.mode, missedPeople.length, pool);
+            if (quizState) render();
+            else toast('Need a couple more people to retry', 'bad');
+          },
+        }, `🔁 Retry the ${missedPeople.length} you missed`)
+      );
+    }
+  }
+
   view.appendChild(
-    el('div', { style: 'display:flex;gap:10px;margin-top:18px' }, [
+    el('div', { style: 'display:flex;gap:10px;margin-top:12px' }, [
       el('button', { class: 'btn btn--block', onclick: () => switchView('quiz') }, 'Play again'),
       el('button', { class: 'btn btn--soft btn--block', onclick: () => switchView('people') }, 'Done'),
     ])
@@ -1055,11 +1276,15 @@ function viewStats(view) {
     ? Math.round(history.reduce((s, h) => s + h.correct / h.total, 0) / totalQuizzes * 100)
     : 0;
   const mastered = people.filter((p) => Store.mastery(p) >= 0.8 && (p.stats?.seen || 0) >= 2).length;
+  const due = Store.dueCount();
+  const streak = Store.dayStreak();
 
   view.appendChild(
     el('div', { class: 'stat-grid' }, [
       el('div', { class: 'stat-box' }, [el('div', { class: 'stat-box__num' }, String(people.length)), el('div', { class: 'stat-box__label' }, 'People')]),
       el('div', { class: 'stat-box' }, [el('div', { class: 'stat-box__num' }, String(mastered)), el('div', { class: 'stat-box__label' }, 'Mastered')]),
+      el('div', { class: 'stat-box' }, [el('div', { class: 'stat-box__num' }, `${due}`), el('div', { class: 'stat-box__label' }, 'Due to review')]),
+      el('div', { class: 'stat-box' }, [el('div', { class: 'stat-box__num' }, `${streak}🔥`), el('div', { class: 'stat-box__label' }, 'Day streak')]),
       el('div', { class: 'stat-box' }, [el('div', { class: 'stat-box__num' }, String(totalQuizzes)), el('div', { class: 'stat-box__label' }, 'Quizzes taken')]),
       el('div', { class: 'stat-box' }, [el('div', { class: 'stat-box__num' }, `${avg}%`), el('div', { class: 'stat-box__label' }, 'Avg score')]),
     ])
@@ -1105,11 +1330,25 @@ function viewStats(view) {
 
   view.appendChild(el('h2', { class: 'section-title' }, 'Settings · AI research'));
   const settings = Store.getSettings();
+  const endpointInput = el('input', { class: 'input', type: 'url', placeholder: 'https://your-worker.workers.dev', value: settings.researchEndpoint || '' });
   const keyInput = el('input', { class: 'input', type: 'password', placeholder: 'sk-ant-…', value: settings.aiKey || '' });
   view.appendChild(
     el('div', { class: 'card' }, [
       el('p', { class: 'hint', style: 'margin-top:0' },
-        'Optional. Paste an Anthropic API key to enable the “Find info with AI” button on each person. The key is stored only on this device and is never included in backups. AI summaries can be wrong — use only for public professional context.'),
+        'Powers the “Find info with AI” button. Two options — set either one. Both are optional; the search links always work without setup. AI results can be wrong; use only for public professional context.'),
+
+      el('p', { class: 'hint', style: 'font-weight:700;color:var(--text);margin-bottom:4px' }, '🌐 Live web lookup (recommended)'),
+      el('p', { class: 'hint', style: 'margin-top:0' }, 'Deploy the free backend in /backend (5-min guide in its README), then paste its URL here. It searches the live web and returns sources — and keeps your key off this device.'),
+      field('Research backend URL', endpointInput),
+      el('div', { class: 'row-actions' }, [
+        el('button', {
+          class: 'btn btn--sm',
+          onclick: () => { Store.setSettings({ researchEndpoint: endpointInput.value.trim() }); toast('Saved', 'good'); },
+        }, 'Save URL'),
+      ]),
+
+      el('p', { class: 'hint', style: 'font-weight:700;color:var(--text);margin:16px 0 4px' }, '🔑 Or: direct AI key (no web search)'),
+      el('p', { class: 'hint', style: 'margin-top:0' }, 'Paste an Anthropic key to use the model’s own knowledge (no live web). Stored only on this device, never in backups.'),
       field('Anthropic API key', keyInput),
       el('div', { class: 'row-actions' }, [
         el('button', {

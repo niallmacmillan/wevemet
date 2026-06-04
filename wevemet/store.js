@@ -24,6 +24,31 @@ let state = null;
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
+const DAY = 24 * 60 * 60 * 1000;
+
+/* A fresh spaced-repetition card. New people are "due" immediately so
+ * they show up in the next review session. */
+const newSRS = () => ({ due: Date.now(), interval: 0, ease: 2.5, reps: 0, lapses: 0 });
+
+/* SM-2-flavoured scheduler. Returns the updated srs object. */
+function scheduleNext(srs, correct) {
+  const s = { ...newSRS(), ...srs };
+  if (correct) {
+    s.reps += 1;
+    if (s.reps === 1) s.interval = 1;
+    else if (s.reps === 2) s.interval = 3;
+    else s.interval = Math.round(s.interval * s.ease);
+    s.ease = Math.min(3.0, s.ease + 0.1);
+  } else {
+    s.reps = 0;
+    s.lapses += 1;
+    s.interval = 1;
+    s.ease = Math.max(1.3, s.ease - 0.2);
+  }
+  s.due = Date.now() + s.interval * DAY;
+  return s;
+}
+
 function persist() {
   try {
     localStorage.setItem(KEY, JSON.stringify(state));
@@ -61,6 +86,7 @@ export const Store = {
     state.people.forEach((p) => {
       if (!p.socials) p.socials = {};
       if (!Array.isArray(p.media)) p.media = [];
+      if (!p.srs) p.srs = newSRS();
     });
     persist();
   },
@@ -132,6 +158,7 @@ export const Store = {
       socials: {},
       media: [],
       stats: { seen: 0, correct: 0, wrong: 0, streak: 0 },
+      srs: newSRS(),
       ...data,
     };
     state.people.push(person);
@@ -163,7 +190,36 @@ export const Store = {
       p.stats.wrong++;
       p.stats.streak = 0;
     }
+    // Update the spaced-repetition schedule.
+    p.srs = scheduleNext(p.srs, isCorrect);
     persist();
+  },
+
+  /* ---- Spaced repetition ---- */
+  duePeople() {
+    const now = Date.now();
+    return this.people()
+      .filter((p) => (p.srs?.due ?? 0) <= now)
+      .sort((a, b) => (a.srs?.due ?? 0) - (b.srs?.due ?? 0));
+  },
+  dueCount() {
+    return this.duePeople().length;
+  },
+  /* Consecutive days (ending today or yesterday) with at least one quiz. */
+  dayStreak() {
+    const days = new Set(
+      this.quizHistory().map((q) => new Date(q.date).toDateString())
+    );
+    if (!days.size) return 0;
+    let streak = 0;
+    const cursor = new Date();
+    // Allow the streak to still count if they haven't played yet today.
+    if (!days.has(cursor.toDateString())) cursor.setDate(cursor.getDate() - 1);
+    while (days.has(cursor.toDateString())) {
+      streak += 1;
+      cursor.setDate(cursor.getDate() - 1);
+    }
+    return streak;
   },
   recordQuiz({ total, correct, mode }) {
     state.quizzes.push({

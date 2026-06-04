@@ -96,11 +96,59 @@ export async function enrichWithAI(person, settings = {}) {
   const text = (data.content || []).map((c) => c.text || '').join('');
   const parsed = parseModelJSON(text);
 
+  return normalize(parsed);
+}
+
+function normalize(parsed) {
   return {
     confident: !!parsed.confident,
     summary: parsed.summary || '',
     suggestedTitle: parsed.suggestedTitle || '',
     suggestedCompany: parsed.suggestedCompany || '',
     notableFacts: Array.isArray(parsed.notableFacts) ? parsed.notableFacts : [],
+    sources: Array.isArray(parsed.sources) ? parsed.sources : [],
   };
+}
+
+/**
+ * Call the user's own deployed backend (e.g. the Cloudflare Worker in
+ * backend/) which performs a LIVE web search + AI summary with sources.
+ * The backend holds the API key, so nothing secret lives in the browser.
+ * @throws {{code:'HTTP'|'PARSE'}} on failure.
+ */
+export async function enrichViaBackend(person, endpoint) {
+  let res;
+  try {
+    res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: person.name, title: person.title, company: person.company }),
+    });
+  } catch (e) {
+    throw { code: 'NETWORK', detail: String(e) };
+  }
+  if (!res.ok) throw { code: 'HTTP', status: res.status, detail: await res.text().catch(() => '') };
+  try {
+    return normalize(await res.json());
+  } catch (e) {
+    throw { code: 'PARSE', detail: String(e) };
+  }
+}
+
+/**
+ * Unified entry point used by the UI. Prefers the live-web backend when a
+ * research endpoint is configured, otherwise falls back to the direct
+ * (model-knowledge-only) call. Throws { code: 'NO_KEY' } when neither is
+ * configured.
+ */
+export async function research(person, settings = {}) {
+  if (settings.researchEndpoint) {
+    const r = await enrichViaBackend(person, settings.researchEndpoint.trim());
+    return { ...r, live: true };
+  }
+  if ((settings.aiKey || '').trim()) {
+    const r = await enrichWithAI(person, settings);
+    return { ...r, live: false };
+  }
+  throw { code: 'NO_KEY' };
 }

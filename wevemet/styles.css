@@ -345,3 +345,29 @@ textarea { min-height: 120px; resize: vertical; }
 .ai-panel__out { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 .ai-summary { margin: 0; font-size: 14px; line-height: 1.45; }
 .ai-facts { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
+.ai-sources { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ai-source { color: var(--brand-2); text-decoration: none; font-weight: 700; font-size: 13px; }
+
+/* ---------- Group-photo face tagging ---------- */
+.crop-stage { position: relative; width: 100%; line-height: 0; border-radius: 12px; overflow: hidden; border: 1px solid var(--line); }
+.crop-img { width: 100%; display: block; user-select: none; -webkit-user-drag: none; }
+.crop-overlay { position: absolute; inset: 0; touch-action: none; cursor: crosshair; }
+.crop-box {
+  position: absolute;
+  border: 2px solid var(--brand-2);
+  border-radius: 6px;
+  background: rgba(139, 92, 246, 0.15);
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.4);
+}
+.crop-box--ghost { border-style: dashed; }
+.crop-box__num {
+  position: absolute; top: -2px; left: -2px;
+  background: var(--brand-2); color: #fff;
+  font-size: 11px; font-weight: 700; line-height: 1;
+  padding: 2px 5px; border-radius: 6px 0 6px 0;
+}
+.crop-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.crop-row { display: flex; align-items: center; gap: 8px; }
+.crop-row__num { width: 18px; text-align: center; font-weight: 700; color: var(--muted); }
+.crop-thumb { width: 48px; height: 48px; flex: 0 0 48px; border-radius: 8px; background: var(--card-2); object-fit: cover; }
+.crop-row .input { flex: 1; }

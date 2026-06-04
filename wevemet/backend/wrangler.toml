@@ -1,0 +1,13 @@
+# Cloudflare Worker config for the WeveMet research backend.
+# See README.md in this folder for full deploy steps.
+
+name = "wevemet-research"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+# Optional: override the model. Leave unset to use the default in worker.js.
+# [vars]
+# MODEL = "claude-sonnet-4-6"
+
+# The Anthropic key is a SECRET, not a var. Set it with:
+#   npx wrangler secret put ANTHROPIC_API_KEY
