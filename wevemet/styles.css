@@ -241,6 +241,9 @@ textarea { min-height: 120px; resize: vertical; }
   display: grid; place-items: end center;
   padding: 0;
 }
+/* The [hidden] attribute must win over display:grid above, otherwise the
+   empty overlay covers the app and blocks all taps. */
+.modal-root[hidden] { display: none; }
 .modal {
   background: var(--bg-soft);
   width: 100%;
