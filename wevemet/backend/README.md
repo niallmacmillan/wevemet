@@ -46,9 +46,10 @@ https://wevemet-research.<your-subdomain>.workers.dev
 
 ## Notes & safety
 
-- **Lock down the origin.** In `worker.js`, change `ALLOWED_ORIGIN = '*'` to your
-  Pages origin (e.g. `https://niallmacmillan.github.io`) so only your app can
-  call it.
+- **Origin lock.** `worker.js` is preset to only accept calls from
+  `https://niallmacmillan.github.io` (your Pages origin). If you move WeveMet to
+  a custom domain, update `ALLOWED_ORIGIN` in `worker.js` to match (or set it to
+  `'*'` to allow any origin).
 - **Costs.** Each lookup is one Anthropic request with web search — typically a
   fraction of a cent, but it's your key, so set usage limits in the Anthropic
   console.

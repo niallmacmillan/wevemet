@@ -13,7 +13,11 @@
  *             notableFacts: [...], sources: ["https://..."] }
  * ===================================================================== */
 
-const ALLOWED_ORIGIN = '*'; // Lock this to your Pages origin in production.
+/* The browser origin allowed to call this Worker. This is your GitHub
+ * Pages origin (scheme + host only — it stays the same even if you rename
+ * the repo, since only the path changes). If you later move WeveMet to a
+ * custom domain, set ALLOWED_ORIGIN to that, or to '*' to allow any. */
+const ALLOWED_ORIGIN = 'https://niallmacmillan.github.io';
 
 const cors = {
   'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
